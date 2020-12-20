@@ -139,3 +139,5 @@ impl Drop for EightMbStack {
         debug_assert_ne!(result, 0);
     }
 }
+
+unsafe impl Send for EightMbStack {}
