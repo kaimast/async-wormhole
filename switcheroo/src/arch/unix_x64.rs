@@ -1,30 +1,31 @@
 use crate::stack;
 
-pub unsafe fn init<S: stack::Stack>(
+unsafe fn stack_push<T>(mut sp: *mut usize, val: T) -> *mut usize {
+    // Stack grows down, so we move the stack pointer first
+    sp = sp.offset(-1 * (std::mem::size_of::<T>() as isize));
+    *(sp.cast::<T>()) = val;
+    sp
+}
+
+pub unsafe fn init_stack<S: stack::Stack>(
     stack: &S,
     f: unsafe extern "C" fn(usize, *mut usize),
 ) -> *mut usize {
-    unsafe fn push(mut sp: *mut usize, val: usize) -> *mut usize {
-        sp = sp.offset(-1);
-        *sp = val;
-        sp
-    }
-
     let mut sp = stack.bottom();
     // Align stack
-    sp = push(sp, 0);
+    sp = stack_push(sp, 0);
     // Save the (generator_wrapper) function on the stack.
-    sp = push(sp, f as usize);
+    sp = stack_push(sp, f as usize);
 
     #[naked]
     unsafe extern "C" fn trampoline_1() {
-        asm!(".cfi_def_cfa rbp, 16", ".cfi_offset rbp, -16", "nop", "nop",)
+        asm!(".cfi_def_cfa rbp, 16", ".cfi_offset rbp, -16", "nop", "nop", options(noreturn))
     }
 
     // Call frame for trampoline_2. The CFA slot is updated by swap::trampoline
     // each time a context switch is performed.
-    sp = push(sp, trampoline_1 as usize + 2); // Point to return instruction after 2 x nop
-    sp = push(sp, 0xdeaddeaddead0cfa);
+    sp = stack_push(sp, trampoline_1 as usize + 2); // Point to return instruction after 2 x nop
+    sp = stack_push(sp, 0xdeaddeaddead0cfa as usize);
 
     #[naked]
     unsafe extern "C" fn trampoline_2() {
@@ -36,17 +37,20 @@ pub unsafe fn init<S: stack::Stack>(
             // previous value of RBP is saved at CFA + 16
             ".cfi_offset rbp, -16",
             "nop",
-            "call [rsp + 16]"
+            "call [rsp + 16]",
+            options(noreturn)
         )
     }
 
     // Save frame pointer
     let frame = sp;
-    sp = push(sp, trampoline_2 as usize + 1); // call instruction
-    sp = push(sp, frame as usize);
+    sp = stack_push(sp, trampoline_2 as usize + 1); // call instruction
+    sp = stack_push(sp, frame as usize);
 
     sp
 }
+
+
 
 #[inline(always)]
 pub unsafe fn swap_and_link_stacks(
@@ -73,11 +77,11 @@ pub unsafe fn swap_and_link_stacks(
         "pop rbp",
         // Get the next instruction to jump to.
         "pop rax",
-        // Doing a pop & jmp instad of a ret helps us here with brench prediction (3x faster on my machine).
+        // Doing a pop & jmp instead of a ret helps us here with branch prediction (3x faster on my machine).
         "jmp rax",
         "1337:",
         // Mark all registers as clobbered as we don't know what the code we are jumping to is going to use.
-        // The compiler will optimise this out and just save the registers it actually knows it must.
+        // The compiler will optimize this out and just save the registers it actually knows it must.
         inout("rcx") sp => _,
         inout("rdx") new_sp => _,
         inout("rdi") arg => ret_val, // 1st argument to called function
@@ -125,11 +129,11 @@ pub unsafe fn swap(arg: usize, new_sp: *mut usize) -> (usize, *mut usize) {
         "pop rbp",
         // Get the next instruction to jump to.
         "pop rax",
-        // Doing a pop & jmp instad of a ret helps us here with brench prediction (3x faster on my machine).
+        // Doing a pop & jmp instead of a ret helps us here with branch prediction (3x faster on my machine).
         "jmp rax",
         "1337:",
         // Mark all registers as clobbered as we don't know what the code we are jumping to is going to use.
-        // The compiler will optimise this out and just save the registers it actually knows it must.
+        // The compiler will optimize this out and just save the registers it actually knows it must.
         inout("rdx") new_sp => _,
         inout("rdi") arg => ret_val, // 1st argument to called function
         out("rsi") ret_sp, // 2nd argument to called function

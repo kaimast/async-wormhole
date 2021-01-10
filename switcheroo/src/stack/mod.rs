@@ -25,4 +25,27 @@ pub trait Stack: Sized {
 
     /// Returns a pointer to the deallocation stack (a Windows construct).
     fn deallocation(&self) -> *mut usize;
+
+    /// Get the size of the stack in bytes
+    fn size(&self) -> usize;
+
+    /// Fill contents of with the contents of another stack
+    /// Note: this assumes stacks are growing in the same direction
+    unsafe fn fill(&mut self, bottom: *const usize, top: *const usize) {
+        let (src_base, dst_base, offset) = if bottom < top {
+            let offset = top.offset_from(bottom);
+            (bottom, self.bottom(), offset as usize)
+        } else if top < bottom {
+            let offset = bottom.offset_from(top);
+            (top, self.top(), offset as usize)
+        } else {
+            panic!("Stack is empty");
+        };
+
+        if offset > self.size() {
+            panic!("Source stack is greater than self");
+        }
+
+        std::ptr::copy(src_base, dst_base, offset);
+    }
 }

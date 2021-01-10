@@ -1,5 +1,3 @@
-#![feature(min_const_generics)]
-
 //! async-wormhole allows you to call `.await` async calls across non-async functions, like extern "C" or JIT
 //! generated code.
 //!
@@ -100,6 +98,26 @@ impl<'a, Stack: stack::Stack, Output> AsyncWormhole<'a, Stack, Output, (), 0> {
     {
         AsyncWormhole::new_with_tls([], stack, f)
     }
+
+    pub fn new_with_offset<F>(stack: Stack, frame_offset: isize, stack_offset: isize, f: F) -> Result<Self, Error> 
+    where
+        F: FnOnce(AsyncYielder<Output>) -> Output + 'a,
+    {
+        let stack_bottom = stack.bottom();
+        let stack_top = stack.top();
+
+        let generator = Generator::new_with_offset(stack, frame_offset, stack_offset, move |yielder, waker| {
+            let async_yielder = AsyncYielder::new(yielder, waker, stack_bottom, stack_top);
+            yielder.suspend(Some(f(async_yielder)));
+        });
+
+        let preserved_thread_locals = [];
+
+        Ok(Self {
+            generator: Cell::new(generator),
+            preserved_thread_locals,
+        })
+    }
 }
 
 impl<'a, Stack: stack::Stack, Output, TLS, const TLS_COUNT: usize>
@@ -120,15 +138,18 @@ impl<'a, Stack: stack::Stack, Output, TLS, const TLS_COUNT: usize>
         f: F,
     ) -> Result<Self, Error>
     where
-        // TODO: This needs to be Send, but because Wasmtime's strucutres are not Send for now I don't
-        // enforce it on an API level. Accroding to
+        // TODO: This needs to be Send, but because Wasmtime's structures are not Send for now I don't
+        // enforce it on an API level. According to
         // https://github.com/bytecodealliance/wasmtime/issues/793#issuecomment-692740254
         // it is safe to move everything connected to a Store to a different thread all at once, but this
         // is impossible to express with the type system.
         F: FnOnce(AsyncYielder<Output>) -> Output + 'a,
     {
-        let generator = Generator::new(stack, |yielder, waker| {
-            let async_yielder = AsyncYielder::new(yielder, waker);
+        let stack_bottom = stack.bottom();
+        let stack_top = stack.top();
+
+        let generator = Generator::new(stack, move |yielder, waker| {
+            let async_yielder = AsyncYielder::new(yielder, waker, stack_bottom, stack_top);
             yielder.suspend(Some(f(async_yielder)));
         });
 
@@ -185,11 +206,13 @@ impl<'a, Stack: stack::Stack + Unpin, Output, TLS: Unpin, const TLS_COUNT: usize
 pub struct AsyncYielder<'a, Output> {
     yielder: &'a Yielder<Waker, Option<Output>>,
     waker: Waker,
+    stack_bottom: *mut usize,
+    stack_top: *mut usize
 }
 
 impl<'a, Output> AsyncYielder<'a, Output> {
-    pub(crate) fn new(yielder: &'a Yielder<Waker, Option<Output>>, waker: Waker) -> Self {
-        Self { yielder, waker }
+    pub(crate) fn new(yielder: &'a Yielder<Waker, Option<Output>>, waker: Waker, stack_bottom: *mut usize, stack_top: *mut usize) -> Self {
+        Self { yielder, waker, stack_bottom, stack_top }
     }
 
     /// Takes an `impl Future` and awaits it, returning the value from it once ready.
@@ -205,5 +228,13 @@ impl<'a, Output> AsyncYielder<'a, Output> {
                 Poll::Ready(result) => return result,
             };
         }
+    }
+
+    pub fn get_stack_bottom(&self) -> *mut usize {
+        self.stack_bottom
+    }
+
+    pub fn get_stack_top(&self) -> *mut usize {
+        self.stack_top
     }
 }

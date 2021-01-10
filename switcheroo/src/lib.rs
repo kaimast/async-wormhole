@@ -98,11 +98,10 @@ where
         }
 
         // Prepare the stack
-        let stack_ptr = unsafe { arch::init(&stack, generator_wrapper::<Input, Output, Stack, F>) };
-
-        // f needs to live on after this function, it is part of the new context. This prevents it
+        let stack_ptr = unsafe { arch::init_stack(&stack, generator_wrapper::<Input, Output, Stack, F>) };
         // from being dropped.
         let f = mem::ManuallyDrop::new(f);
+        let f_ptr = &f as *const mem::ManuallyDrop<F> as usize;
 
         // This call will link the stacks together with assembly directives magic, but once the
         // first `arch::swap` inside `generator_wrapper` is reached it will yield back before the
@@ -110,7 +109,7 @@ where
         // Only the next call to `resume` will start executing the closure.
         let stack_ptr = unsafe {
             arch::swap_and_link_stacks(
-                &f as *const mem::ManuallyDrop<F> as usize,
+                f_ptr,
                 stack_ptr,
                 stack.bottom(),
             )
@@ -121,6 +120,19 @@ where
             stack,
             stack_ptr: Some(NonNull::new(stack_ptr).unwrap()),
             phantom: PhantomData,
+        }
+    }
+
+    pub fn new_with_offset<F>(stack: Stack, _frame_offset: isize, stack_offset: isize, _func: F) -> Generator<'a, Input, Output, Stack>
+    where
+        F: FnOnce(&Yielder<Input, Output>, Input) + 'a,
+    {
+        let stack_ptr = unsafe{ stack.bottom().offset(stack_offset) };
+
+        Generator {
+            stack,
+            stack_ptr: Some(NonNull::new(stack_ptr).unwrap()),
+            phantom: PhantomData
         }
     }
 

@@ -55,6 +55,8 @@ impl Stack for EightMbStack {
         }
     }
 
+    fn size(&self) -> usize { EIGHT_MB }
+
     #[cfg(target_family = "unix")]
     fn bottom(&self) -> *mut usize {
         unsafe { self.0.add(EIGHT_MB / size_of::<usize>()) }
