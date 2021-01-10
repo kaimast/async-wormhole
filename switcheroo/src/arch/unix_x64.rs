@@ -1,10 +1,12 @@
 use crate::stack;
 
-unsafe fn stack_push<T>(mut sp: *mut usize, val: T) -> *mut usize {
+///FIXME use void or char pointers instead of usize
+unsafe fn stack_push<T>(sp: *mut usize, val: T) -> *mut usize {
     // Stack grows down, so we move the stack pointer first
-    sp = sp.offset(-1 * (std::mem::size_of::<T>() as isize));
-    *(sp.cast::<T>()) = val;
-    sp
+    let tptr = sp.cast::<T>().offset(-1);
+    *tptr = val;
+
+    tptr.cast::<usize>()
 }
 
 pub unsafe fn init_stack<S: stack::Stack>(
@@ -13,7 +15,7 @@ pub unsafe fn init_stack<S: stack::Stack>(
 ) -> *mut usize {
     let mut sp = stack.bottom();
     // Align stack
-    sp = stack_push(sp, 0);
+    sp = stack_push(sp, 0 as usize);
     // Save the (generator_wrapper) function on the stack.
     sp = stack_push(sp, f as usize);
 
